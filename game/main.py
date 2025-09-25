@@ -1,63 +1,74 @@
 # game/main.py
 import asyncio, pygame
 
+WIDTH, HEIGHT = 900, 500
+GROUND_Y = HEIGHT  # ground plane at the bottom edge
+
 async def main():
     pygame.init()
-    screen = pygame.display.set_mode((900, 500))
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
     clock = pygame.time.Clock()
     pygame.display.set_caption("Flyman")
+
+    # Colors
+    SKY_COLOR = pygame.Color('skyblue')
+    PLAYER_COLOR = pygame.Color('red')
+    COLLISION_COLOR = pygame.Color('green')
+
+    # Player (physics uses a Rect; rendering uses a circle at rect.center)
+    RADIUS = 11
+    player_rect = pygame.Rect(0, 0, RADIUS * 2, RADIUS * 2)
+    player_rect.left = 80
+    player_rect.centery = 250
+
+    vel_y = 0.0
+    GRAVITY = 0.5
+    JUMP_VELOCITY = -14
     running = True
-
-    pixel_font = pygame.font.Font("game/assets/fonts/pixeltype.ttf", 50)
-    sky_surface = pygame.image.load("game/assets/graphics/sky.png").convert()
-
-
-    player_x_pos = 80
-    player_y_pos = 250
-    player_gravity = 0
-    player_surf = pygame.image.load("game/assets/graphics/player.png").convert_alpha()
-    player_rect = player_surf.get_rect(center = (player_x_pos, player_y_pos))
-
-
-
-
 
     while running:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 running = False
-            
-            # Player logic
-            if e.type == pygame.KEYDOWN:
-                if e.key == pygame.K_SPACE:
-                    player_gravity = -14
+            elif e.type == pygame.KEYDOWN:
+                # Only allow jumping when on ground
+                if e.key == pygame.K_SPACE and player_rect.bottom >= GROUND_Y:
+                    vel_y = JUMP_VELOCITY
+
+        # Physics
+        vel_y += GRAVITY
+        player_rect.y += int(vel_y)
+
+        # Ground collision: clamp to ground and zero velocity
+        if player_rect.bottom >= GROUND_Y:
+            player_rect.bottom = GROUND_Y
+            vel_y = 0.0
 
         # Background
-        screen.blit(sky_surface, (0, 0))
-        screen.blit(pixel_font.render("Flyman", True, 'black'), (50, 50))
+        screen.fill(SKY_COLOR)
+
+        player_color = COLLISION_COLOR if player_rect.bottom >= GROUND_Y else PLAYER_COLOR
+
+        # Draw the player as a circle at the rect center
+        pygame.draw.circle(screen, player_color, player_rect.center, RADIUS)
 
 
-        # Player
-        player_gravity += 0.5
-        player_y_pos += player_gravity
-        screen.blit(player_surf, player_rect)
-        
-        player_rect.y = player_y_pos
-        if player_rect.bottom >= 500:
-            player_rect.bottom = 500
-            player_gravity = 0
+        # Drawings for debugging
+        # pygame.draw.rect(screen, "black", player_rect, 1)   # Outline of player rect
+        # screen.set_at((player_rect.left, player_rect.centery), pygame.Color("black")) # Center left pixel
+        # screen.set_at(player_rect.center, pygame.Color("black")) # Center pixel
+        # pygame.draw.line(screen, (0,0,0), (0, GROUND_Y-1), (WIDTH, GROUND_Y-1)) # Ground line
 
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_SPACE]:
-            print("UP")
+
+        # Prints for debugging
+        print("Velocity: " + str(vel_y))
 
 
         pygame.display.flip()
         clock.tick(60)
-        await asyncio.sleep(0)  # yield to browser each frame
-    pygame.quit()
+        await asyncio.sleep(0)
 
+    pygame.quit()
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
