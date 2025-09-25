@@ -40,7 +40,7 @@ class Player:
         self.GLIDE_ACCEL = 0.55
         self.GLIDE_DRAG_ACTIVE = 0.992
         self.GLIDE_DRAG_IDLE = 0.82
-        self.GLIDE_MAX_SPEED = 8.5
+        self.GLIDE_MAX_SPEED = 5.5
         self.GLIDE_MIN_ENTRY_SPEED = 3.2
         self.GLIDE_ENTRY_DESCENT_CEILING = 2.6
         self.GLIDE_REVERSE_DAMP = 0.9
