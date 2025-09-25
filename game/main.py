@@ -1,10 +1,10 @@
-# game/main.py
-import asyncio, pygame
+import asyncio
+from dataclasses import dataclass
+
+import pygame
 
 WIDTH, HEIGHT = 1200, 500
 
-from dataclasses import dataclass
-import pygame
 
 @dataclass
 class ContactInfo:
@@ -12,6 +12,7 @@ class ContactInfo:
     hit_head: bool = False
     hit_left: bool = False
     hit_right: bool = False
+
 
 class Player:
     def __init__(self, x, y, radius):
@@ -24,23 +25,42 @@ class Player:
         self.pos_y = float(self.rect.centery)
         self.vel_x = 0.0
         self.vel_y = 0.0
+        self.input_horizontal = 0
 
         # constants
         self.GRAVITY = 0.5
         self.MOVE_SPEED = 4
         self.JUMP = -13
 
-        # simple FSM state (expand later: 'airborne', 'grounded', 'gliding', …)
+        # Gliding motion tuning
+        self.GLIDE_GRAVITY = 0.33
+        self.GLIDE_LIFT_FACTOR = 0.04
+        self.GLIDE_MAX_DESCENT_SPEED = 4.8
+        self.GLIDE_UPWARD_CAP = -2.5
+        self.GLIDE_ACCEL = 0.55
+        self.GLIDE_DRAG_ACTIVE = 0.992
+        self.GLIDE_DRAG_IDLE = 0.82
+        self.GLIDE_MAX_SPEED = 8.5
+        self.GLIDE_MIN_ENTRY_SPEED = 3.2
+        self.GLIDE_ENTRY_DESCENT_CEILING = 2.6
+        self.GLIDE_REVERSE_DAMP = 0.9
+
+        self.facing = pygame.Vector2(0, 1)
+
+        # simple FSM state (expand later: 'airborne', 'grounded', 'gliding', ...)
         self.movement_state = "airborne"
 
     def handle_input(self, keys):
-        # horizontal input (continuous)
+        horizontal = 0
         if keys[pygame.K_a]:
-            self.vel_x = -self.MOVE_SPEED
-        elif keys[pygame.K_d]:
-            self.vel_x = self.MOVE_SPEED
-        else:
-            self.vel_x = 0.0
+            horizontal -= 1
+        if keys[pygame.K_d]:
+            horizontal += 1
+
+        self.input_horizontal = horizontal
+
+        if self.movement_state != "gliding":
+            self.vel_x = horizontal * self.MOVE_SPEED
 
     def try_jump(self):
         if self.movement_state == "grounded":
@@ -48,8 +68,26 @@ class Player:
             self.movement_state = "airborne"
 
     def start_glide(self):
-        if self.movement_state == "airborne":
-            self.movement_state = "gliding"
+        if self.movement_state != "airborne":
+            return
+
+        direction = 1
+        if abs(self.vel_x) >= 0.1:
+            direction = 1 if self.vel_x > 0 else -1
+        elif self.input_horizontal != 0:
+            direction = self.input_horizontal
+        elif abs(self.facing.x) >= 0.1:
+            direction = 1 if self.facing.x > 0 else -1
+
+        horizontal_speed = abs(self.vel_x)
+        carry_from_drop = max(self.vel_y, 0.0) * 0.15
+        target_speed = max(self.GLIDE_MIN_ENTRY_SPEED, horizontal_speed + carry_from_drop)
+        self.vel_x = direction * min(target_speed, self.GLIDE_MAX_SPEED)
+
+        self.vel_y = max(min(self.vel_y, self.GLIDE_ENTRY_DESCENT_CEILING), self.GLIDE_UPWARD_CAP)
+
+        self.movement_state = "gliding"
+        self.update_facing()
 
     def spacebar_event(self):
         if self.movement_state == "grounded":
@@ -57,24 +95,48 @@ class Player:
         elif self.movement_state == "airborne":
             self.start_glide()
 
+    def apply_forces(self):
+        was_gliding = self.movement_state == "gliding"
+        if was_gliding:
+            accel = self.input_horizontal * self.GLIDE_ACCEL
+            if self.input_horizontal and self.vel_x * self.input_horizontal < 0:
+                self.vel_x *= self.GLIDE_REVERSE_DAMP
+            self.vel_x += accel
 
+            drag = self.GLIDE_DRAG_ACTIVE if self.input_horizontal else self.GLIDE_DRAG_IDLE
+            self.vel_x *= drag
+            self.vel_x = max(-self.GLIDE_MAX_SPEED, min(self.vel_x, self.GLIDE_MAX_SPEED))
 
-    def apply_gravity(self):
-        self.vel_y += self.GRAVITY
+            self.vel_y += self.GLIDE_GRAVITY
+            lift = abs(self.vel_x) * self.GLIDE_LIFT_FACTOR
+            self.vel_y -= lift
+            if self.vel_y > self.GLIDE_MAX_DESCENT_SPEED:
+                self.vel_y = self.GLIDE_MAX_DESCENT_SPEED
+            if self.vel_y < self.GLIDE_UPWARD_CAP:
+                self.vel_y = self.GLIDE_UPWARD_CAP
+
+            if self.input_horizontal == 0 and abs(self.vel_x) < 0.25:
+                self.movement_state = "airborne"
+
+        if self.movement_state != "gliding":
+            self.vel_y += self.GRAVITY
+
+    def update_facing(self):
+        velocity = pygame.Vector2(self.vel_x, self.vel_y)
+        if velocity.length_squared() >= 1e-4:
+            self.facing = velocity.normalize()
 
     def move_and_collide(self, platforms):
         contacts = ContactInfo()
         half_width = self.rect.width / 2
         half_height = self.rect.height / 2
 
-        # we can’t rely on Rect.colliderect here: it only fires with >=1px overlap,
-        # but our float physics / int rect rounding lets the player “touch” a platform
-        # without overlapping. So we detect crossings using last-frame float edges.
+        # pygame.Rect.colliderect requires >=1px overlap, so track float edges to catch crossings.
         prev_center_y = self.pos_y
         prev_bottom = prev_center_y + half_height
         prev_top = prev_center_y - half_height
 
-        self.apply_gravity()
+        self.apply_forces()
         self.pos_y += self.vel_y
         vertical_velocity = self.vel_y
         self.rect.centery = round(self.pos_y)
@@ -86,7 +148,7 @@ class Player:
             if self.rect.right <= plat.left or self.rect.left >= plat.right:
                 continue
 
-            if vertical_velocity >= 0 and prev_bottom <= plat.top and self.rect.bottom >= plat.top: # Falling? AND Player was above the platform AND bottom has reached or passed platform top
+            if vertical_velocity >= 0 and prev_bottom <= plat.top and self.rect.bottom >= plat.top:
                 if landing_plat is None or plat.top < landing_plat.top:
                     landing_plat = plat
 
@@ -105,7 +167,6 @@ class Player:
             self.vel_y = 0.0
             contacts.hit_head = True
 
-        # --- horizontal: similar crossing checks ---
         prev_center_x = self.pos_x
         prev_left = prev_center_x - half_width
         prev_right = prev_center_x + half_width
@@ -145,6 +206,8 @@ class Player:
         elif self.movement_state != "gliding":
             self.movement_state = "airborne"
 
+        self.update_facing()
+
         return contacts
 
 
@@ -173,9 +236,9 @@ async def main():
     platforms = [
         pygame.Rect(0, HEIGHT-10, WIDTH, 10),       # ground platform
         pygame.Rect(200, HEIGHT-250, 150, 10),
-        pygame.Rect(200, HEIGHT-150, 150, 10), 
+        pygame.Rect(200, HEIGHT-150, 150, 10),
         pygame.Rect(420, 270, 10, 190),
-        pygame.Rect(430, 271, 50, 189)      # NOTE Oszillation platform? 
+        pygame.Rect(430, 271, 50, 189)      # NOTE Oszillation platform?
     ]
 
     running = True
@@ -187,16 +250,14 @@ async def main():
                 running = False
 
         keys = pygame.key.get_pressed()
-        player.handle_input(keys = keys)
+        player.handle_input(keys=keys)
 
         space_now = keys[pygame.K_SPACE]
         if space_now and not space_was_down:
             player.spacebar_event()
         space_was_down = space_now
 
-
-        contacts = player.move_and_collide(platforms= platforms)
-
+        contacts = player.move_and_collide(platforms=platforms)
 
         # --- draw ---
         screen.fill(SKY_COLOR)
@@ -210,9 +271,25 @@ async def main():
 
         pygame.draw.circle(screen, state_color, player.rect.center, RADIUS)
 
+        nose_dir = pygame.Vector2(player.facing)
+        if nose_dir.length_squared() < 1e-4:
+            nose_dir = pygame.Vector2(0, 1)
+        nose_length = RADIUS + 12
+        nose_base_offset = RADIUS * 0.3
+        nose_half_width = 4
+        center_vec = pygame.Vector2(player.rect.center)
+        tip = center_vec + nose_dir * nose_length
+        base_center = center_vec + nose_dir * nose_base_offset
+        right_vec = pygame.Vector2(-nose_dir.y, nose_dir.x)
+        nose_points = [
+            tip.xy,
+            (base_center + right_vec * nose_half_width).xy,
+            (base_center - right_vec * nose_half_width).xy,
+        ]
+        pygame.draw.polygon(screen, state_color, nose_points)
+
         for plat in platforms:
             pygame.draw.rect(screen, PLATFORM_COLOR, plat)
-
 
         print(f"Player pos: ({player.pos_x:.2f}, {player.pos_y:.2f}) Vel: ({player.vel_x:.2f}, {player.vel_y:.2f}) State: {player.movement_state} Contacts: {contacts}")
         # Debug helpers (uncomment if needed)
@@ -226,6 +303,7 @@ async def main():
         await asyncio.sleep(0)
 
     pygame.quit()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
