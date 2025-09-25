@@ -153,9 +153,9 @@ async def main():
         screen.fill(SKY_COLOR)
         screen.blit(text_surface, (50, 50))
 
-        pygame.draw.circle(screen, "green" if contacts.on_ground else "red", player.rect.center, 11)
+        pygame.draw.circle(screen, PLAYER_COLOR if contacts.on_ground else GROUNDED_COLOR, player.rect.center, 11)
         for plat in platforms:
-            pygame.draw.rect(screen, "darkgreen", plat)
+            pygame.draw.rect(screen, PLATFORM_COLOR, plat)
 
 
         print(f"Player pos: ({player.pos_x:.2f}, {player.pos_y:.2f}) Vel: ({player.vel_x:.2f}, {player.vel_y:.2f}) State: {player.movement_state} Contacts: {contacts}")
