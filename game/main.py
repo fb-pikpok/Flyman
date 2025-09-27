@@ -26,26 +26,23 @@ class Player:
         self.vel_x = 0.0
         self.vel_y = 0.0
         self.input_horizontal = 0
+        self.radius = radius
 
         # constants
-        self.GRAVITY = 0.5
-        self.MOVE_SPEED = 4
-        self.JUMP = -13
+        self.GRAVITY = 0.2
+        self.MOVE_SPEED = 5
+        self.JUMP = -6
 
-        # Gliding motion tuning
-        self.GLIDE_GRAVITY = 0.33
-        self.GLIDE_LIFT_FACTOR = 0.04
-        self.GLIDE_MAX_DESCENT_SPEED = 4.8
-        self.GLIDE_UPWARD_CAP = -2.5
-        self.GLIDE_ACCEL = 0.55
-        self.GLIDE_DRAG_ACTIVE = 0.992
-        self.GLIDE_DRAG_IDLE = 0.82
-        self.GLIDE_MAX_SPEED = 5.5
-        self.GLIDE_MIN_ENTRY_SPEED = 3.2
-        self.GLIDE_ENTRY_DESCENT_CEILING = 2.6
-        self.GLIDE_REVERSE_DAMP = 0.9
+        # Gliding tuning
+        self.GLIDE_GRAVITY = -0.2
 
         self.facing = pygame.Vector2(0, 1)
+        self.nose_pitch = 1.0
+
+        self.debug_effective_gravity = self.GRAVITY
+        self.debug_lift = 0.0
+        self.debug_penalty = 0.0
+        self.debug_speed = 0.0
 
         # simple FSM state (expand later: 'airborne', 'grounded', 'gliding', ...)
         self.movement_state = "airborne"
@@ -71,23 +68,12 @@ class Player:
         if self.movement_state != "airborne":
             return
 
-        direction = 1
-        if abs(self.vel_x) >= 0.1:
-            direction = 1 if self.vel_x > 0 else -1
-        elif self.input_horizontal != 0:
-            direction = self.input_horizontal
-        elif abs(self.facing.x) >= 0.1:
-            direction = 1 if self.facing.x > 0 else -1
-
-        horizontal_speed = abs(self.vel_x)
-        carry_from_drop = max(self.vel_y, 0.0) * 0.15
-        target_speed = max(self.GLIDE_MIN_ENTRY_SPEED, horizontal_speed + carry_from_drop)
-        self.vel_x = direction * min(target_speed, self.GLIDE_MAX_SPEED)
-
-        self.vel_y = max(min(self.vel_y, self.GLIDE_ENTRY_DESCENT_CEILING), self.GLIDE_UPWARD_CAP)
-
         self.movement_state = "gliding"
-        self.update_facing()
+
+
+    def stop_glide(self):
+        if self.movement_state == "gliding":
+            self.movement_state = "airborne"
 
     def spacebar_event(self):
         if self.movement_state == "grounded":
@@ -96,35 +82,49 @@ class Player:
             self.start_glide()
 
     def apply_forces(self):
-        was_gliding = self.movement_state == "gliding"
-        if was_gliding:
-            accel = self.input_horizontal * self.GLIDE_ACCEL
-            if self.input_horizontal and self.vel_x * self.input_horizontal < 0:
-                self.vel_x *= self.GLIDE_REVERSE_DAMP
-            self.vel_x += accel
+        velocity = pygame.Vector2(self.vel_x, self.vel_y)
+        speed = velocity.length()
+        self.debug_speed = speed
 
-            drag = self.GLIDE_DRAG_ACTIVE if self.input_horizontal else self.GLIDE_DRAG_IDLE
-            self.vel_x *= drag
-            self.vel_x = max(-self.GLIDE_MAX_SPEED, min(self.vel_x, self.GLIDE_MAX_SPEED))
-
+        if self.movement_state == "gliding" and self.nose_pitch > -0.5:
             self.vel_y += self.GLIDE_GRAVITY
-            lift = abs(self.vel_x) * self.GLIDE_LIFT_FACTOR
-            self.vel_y -= lift
-            if self.vel_y > self.GLIDE_MAX_DESCENT_SPEED:
-                self.vel_y = self.GLIDE_MAX_DESCENT_SPEED
-            if self.vel_y < self.GLIDE_UPWARD_CAP:
-                self.vel_y = self.GLIDE_UPWARD_CAP
-
-            if self.input_horizontal == 0 and abs(self.vel_x) < 0.25:
-                self.movement_state = "airborne"
-
-        if self.movement_state != "gliding":
+            self.debug_effective_gravity = self.GLIDE_GRAVITY
+            self.debug_lift = 0.0
+            self.debug_penalty = 0.0
+        else:
             self.vel_y += self.GRAVITY
+            self.debug_effective_gravity = self.GRAVITY
+            self.debug_lift = 0.0
+            self.debug_penalty = 0.0
 
     def update_facing(self):
         velocity = pygame.Vector2(self.vel_x, self.vel_y)
         if velocity.length_squared() >= 1e-4:
             self.facing = velocity.normalize()
+        self.nose_pitch = self.facing.y
+
+    def render(self, surface, color):
+        pygame.draw.circle(surface, color, self.rect.center, self.radius)
+
+        nose_dir = pygame.Vector2(self.facing)
+        if nose_dir.length_squared() < 1e-4:
+            nose_dir = pygame.Vector2(0, 1)
+
+        nose_length = self.radius + 12
+        nose_base_offset = self.radius * 0.3
+        nose_half_width = max(3, int(self.radius * 0.35))
+
+        center_vec = pygame.Vector2(self.rect.center)
+        tip = center_vec + nose_dir * nose_length
+        base_center = center_vec + nose_dir * nose_base_offset
+        right_vec = pygame.Vector2(-nose_dir.y, nose_dir.x)
+        nose_points = [
+            tip.xy,
+            (base_center + right_vec * nose_half_width).xy,
+            (base_center - right_vec * nose_half_width).xy,
+        ]
+
+        pygame.draw.polygon(surface, color, nose_points)
 
     def move_and_collide(self, platforms):
         contacts = ContactInfo()
@@ -218,7 +218,8 @@ async def main():
     pygame.display.set_caption("Flyman")
 
     # UI
-    game_font = pygame.font.Font('game/assets/fonts/pixeltype.ttf', 50)
+    game_font = pygame.font.Font('game/assets/fonts/pixeltype.ttf', 25)
+    debug_font = pygame.font.Font('game/assets/fonts/pixeltype.ttf', 18)
     text_surface = game_font.render('Flyman', False, pygame.Color('black'))
 
     # Colors
@@ -230,13 +231,14 @@ async def main():
 
     # Player (physics: keep float pos, render/collide via Rect)
     RADIUS = 11
-    player = Player(80, 250, RADIUS)
+    player = Player(250, 50, RADIUS)
 
     # Platforms
     platforms = [
         pygame.Rect(0, HEIGHT-10, WIDTH, 10),       # ground platform
         pygame.Rect(200, HEIGHT-250, 150, 10),
         pygame.Rect(200, HEIGHT-150, 150, 10),
+        pygame.Rect(200, HEIGHT-370, 150, 10),
         pygame.Rect(420, 270, 10, 190),
         pygame.Rect(430, 271, 50, 189)      # NOTE Oszillation platform?
     ]
@@ -255,6 +257,8 @@ async def main():
         space_now = keys[pygame.K_SPACE]
         if space_now and not space_was_down:
             player.spacebar_event()
+        elif not space_now and space_was_down:
+            player.stop_glide()
         space_was_down = space_now
 
         contacts = player.move_and_collide(platforms=platforms)
@@ -269,29 +273,27 @@ async def main():
             "gliding": GLIDE_COLOR,
         }.get(player.movement_state, PLAYER_COLOR)
 
-        pygame.draw.circle(screen, state_color, player.rect.center, RADIUS)
-
-        nose_dir = pygame.Vector2(player.facing)
-        if nose_dir.length_squared() < 1e-4:
-            nose_dir = pygame.Vector2(0, 1)
-        nose_length = RADIUS + 12
-        nose_base_offset = RADIUS * 0.3
-        nose_half_width = 4
-        center_vec = pygame.Vector2(player.rect.center)
-        tip = center_vec + nose_dir * nose_length
-        base_center = center_vec + nose_dir * nose_base_offset
-        right_vec = pygame.Vector2(-nose_dir.y, nose_dir.x)
-        nose_points = [
-            tip.xy,
-            (base_center + right_vec * nose_half_width).xy,
-            (base_center - right_vec * nose_half_width).xy,
-        ]
-        pygame.draw.polygon(screen, state_color, nose_points)
+        player.render(screen, state_color)
 
         for plat in platforms:
             pygame.draw.rect(screen, PLATFORM_COLOR, plat)
 
-        print(f"Player pos: ({player.pos_x:.2f}, {player.pos_y:.2f}) Vel: ({player.vel_x:.2f}, {player.vel_y:.2f}) State: {player.movement_state} Contacts: {contacts}")
+        debug_lines = [
+            f"vel_x: {player.vel_x:+.2f}",
+            f"vel_y: {player.vel_y:+.2f}",
+            f"input_h: {player.input_horizontal:+d}",
+            f"nose_y: {player.nose_pitch:+.2f}",
+            f"g_eff: {player.debug_effective_gravity:+.2f}",
+            f"lift: {player.debug_lift:+.2f}",
+            f"pen: {player.debug_penalty:+.2f}",
+            f"spd: {player.debug_speed:+.2f}",
+        ]
+        line_height = debug_font.get_linesize()
+        total_height = line_height * len(debug_lines)
+        start_y = HEIGHT - 20 - total_height
+        for idx, line in enumerate(debug_lines):
+            text = debug_font.render(line, False, pygame.Color('black'))
+            screen.blit(text, (20, start_y + idx * line_height))
         # Debug helpers (uncomment if needed)
         # pygame.draw.rect(screen, "black", player_rect, 1)
         # screen.set_at((player_rect.left, player_rect.centery), pygame.Color("black"))
